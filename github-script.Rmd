@@ -1,0 +1,562 @@
+---
+title: "Barelli et al. -  Sci Rep 2021"
+output: html_document
+---
+  
+#Setup
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(vegan)
+library(phyloseq)
+
+knitr::opts_chunk$set(echo = TRUE, 
+                      message = FALSE,
+                      tidy = TRUE,
+                      fig.width = 10,
+                      fig.height = 6,
+                      warning = FALSE)
+```
+
+```{r}
+theme_set(theme_bw())
+```
+
+#Data input and rarefaction
+
+```{r tidy=TRUE, warning=FALSE}
+Sys.setlocale("LC_ALL", 'en_US.UTF-8')
+
+###### START import data
+ps_16S <- import_biom("tables_16S.biom", treefilename="tree_rooted_16S.tree",
+                      refseqfilename="otus_16S.fasta")
+ps_ITS <- import_biom("tables_ITS.biom", treefilename="tree_rooted_ITS.tree", 
+                      refseqfilename="otus_ITS.fasta")
+meta <- read_tsv("metadata.txt")
+
+meta = dplyr::rename(meta, coord.x=x, coord.y=y)
+colnames(tax_table(ps_16S)) <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus")
+colnames(tax_table(ps_ITS)) <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Sp")
+
+sampledata_16S <-  data.frame(
+  left_join(
+    rownames_to_column(data.frame(sample_data(ps_16S), check.names = F), var = "ID_16S"),
+    meta, by = "ID"),
+  row.names = "ID_16S")
+
+sampledata_ITS <- data.frame(
+  left_join(
+    rownames_to_column(data.frame(sample_data(ps_ITS), check.names = F), var = "ID_ITS"),
+    meta, by = "ID"),
+  row.names = "ID_ITS")
+
+sample_data(ps_16S) <- sampledata_16S
+sample_data(ps_ITS) <- sampledata_ITS
+###### END import data
+
+###### START Rarefaction
+DEPTH_16S = 2400
+ps_rare_16S = rarefy_even_depth(ps_16S, rngseed=1, replace=FALSE, sample.size=DEPTH_16S)
+ps_frac_16S = transform_sample_counts(ps_rare_16S, function(OTU) OTU/sum(OTU))
+
+DEPTH_ITS = 2400
+ps_rare_ITS = rarefy_even_depth(ps_ITS, rngseed=1, replace=FALSE, sample.size=DEPTH_ITS)
+ps_frac_ITS = transform_sample_counts(ps_rare_ITS, function(OTU) OTU/sum(OTU))
+###### END Rarefaction
+```
+#Column description
+# Helminth Counts: Strongyloides Trichuris Strongylid Spirurid Dicrocelid
+# Forest: Forest_block
+# Host species: Species
+
+
+##Alpha diversity - Bacteria
+```{r}
+library(phyloseq)
+rich = estimate_richness(ps_rare_16S,measures=c("Shannon","Chao1"))
+sampletable <- sample_data(ps_rare_16S)
+sampletable.tidy <- as_tibble(sampletable,rownames="Sample")
+rich.tidy = as_tibble(rich,rownames="Sample")%>% mutate(Sample=str_replace_all(Sample,"\\.","-"))
+rich.tidy <- sampletable.tidy %>% right_join(rich.tidy)
+
+ alpha_16S_S <- rich.tidy %>% 
+  pivot_longer(cols = 26:30,names_to = "Parasite",values_to = "P_count") %>%
+   filter(!Parasite %in% c("Spirurid","Dicrocelid")) %>%
+  mutate(Infected=ifelse(P_count >0,"Positive","Negative"))%>% ggplot() + 
+   geom_boxplot(aes(x=Infected,y=Shannon,fill=Forest_block)) +
+  scale_fill_brewer(palette="Accent",name = "Forest",labels=c("FF","PF")) +  
+  facet_grid(Species~Parasite,scales = "free_y")
+alpha_16S_S
+
+
+ alpha_16S <- rich.tidy %>% 
+  pivot_longer(cols = 26:30,names_to = "Parasite",values_to = "P_count") %>%
+   filter(!Parasite %in% c("Spirurid","Dicrocelid")) %>%
+  mutate(Infected=ifelse(P_count >0,"Positive","Negative"))%>% ggplot() + 
+   geom_boxplot(aes(x=Infected,y=Chao1,fill=Forest_block)) +
+  scale_fill_brewer(palette="Accent",name = "Forest",labels=c("FF","PF")) +  
+  facet_grid(Species~Parasite,scales = "free_y")
+alpha_16S
+```
+# Generalized linear model of bacterial richness (Chao1)
+```{r}
+library(phyloseq)
+rich = estimate_richness(ps_rare_16S,measures=c("Shannon","Chao1"))
+sampletable <- sample_data(ps_rare_16S)
+sampletable.tidy <- as_tibble(sampletable,rownames="Sample")
+rich.tidy = as_tibble(rich,rownames="Sample")%>% mutate(Sample=str_replace_all(Sample,"\\.","-"))
+rich.tidy <- sampletable.tidy %>% right_join(rich.tidy)
+
+rich.tidy <- rich.tidy %>% 
+  pivot_longer(cols = 26:30,names_to = "Parasite",values_to = "P_count") %>%
+  mutate(Infected=ifelse(P_count >0,"Pos","Neg"))
+
+fm <- glm(Chao1 ~  Species + Parasite + Forest_block + Infected %in% (Species + Parasite + Forest_block), rich.tidy,family = "poisson")
+#opar=par(mfrow=c(2,2))
+#plot(fm,main="fm")
+```
+#Group sizes
+```{r}
+rich.tidy %>% count(Species,Forest_block,Parasite,Infected) %>% pivot_wider(names_from = Infected,values_from = n)
+```
+# Post-hoc analysis 
+```{r}
+library("emmeans")
+library("broom")
+fm.emm=emmeans(fm,pairwise ~ Infected | (Species + Parasite + Forest_block),type = "response")
+tidy(fm.emm$contrasts)
+```
+# Generalized linear model of bacterial diversity (Shannon) 
+```{r}
+library(phyloseq)
+rich = estimate_richness(ps_rare_16S,measures=c("Shannon","Chao1"))
+sampletable <- sample_data(ps_rare_16S)
+sampletable.tidy <- as_tibble(sampletable,rownames="Sample")
+rich.tidy = as_tibble(rich,rownames="Sample")%>% mutate(Sample=str_replace_all(Sample,"\\.","-"))
+rich.tidy <- sampletable.tidy %>% right_join(rich.tidy)
+
+rich.tidy <- rich.tidy %>% 
+  pivot_longer(cols = 26:30,names_to = "Parasite",values_to = "P_count") %>%
+  mutate(Infected=ifelse(P_count >0,"Pos","Neg"))
+
+fm_S <- glm(Shannon ~  Species + Parasite + Forest_block + Infected %in% (Species + Parasite + Forest_block), rich.tidy,family = "gaussian")
+#opar=par(mfrow=c(2,2))
+#plot(fm_S,main="fm_S")
+```
+# Post-hoc analysis 
+```{r}
+library("emmeans")
+library("broom")
+fm_S.emm=emmeans(fm_S,pairwise ~ Infected | (Species + Parasite + Forest_block),type = "response")
+tidy(fm_S.emm$contrasts)
+```
+
+##Alpha diversity - Fungi
+```{r}
+library(phyloseq)
+rich = estimate_richness(ps_rare_ITS,measures = c("Shannon","Chao1"))
+sampletable <- sample_data(ps_rare_ITS)
+sampletable.tidy <- as_tibble(sampletable,rownames="Sample")
+rich.tidy = as_tibble(rich,rownames="Sample")%>% mutate(Sample=str_replace_all(Sample,"\\.","-"))
+rich.tidy <- sampletable.tidy %>% right_join(rich.tidy)
+
+alpha_ITS_S <- rich.tidy %>% 
+pivot_longer(cols = 26:30,names_to = "Parasite",values_to = "P_count") %>%
+  filter(!Parasite %in% c("Spirurid","Dicrocelid")) %>%
+  mutate(Infected=ifelse(P_count >0,"Positive","Negative"))%>% ggplot()+
+    geom_boxplot(aes(x=Infected,y=Shannon,fill=Forest_block)) +
+  scale_fill_brewer(palette="Accent",name = "Forest",labels=c("FF","PF")) + 
+  facet_grid(Species~Parasite,scales = "free_y")
+alpha_ITS_S
+ 
+alpha_ITS <- rich.tidy %>% 
+  pivot_longer(cols = 26:30,names_to = "Parasite",values_to = "P_count") %>%
+   filter(!Parasite %in% c("Spirurid","Dicrocelid")) %>%
+  mutate(Infected=ifelse(P_count >0,"Positive","Negative"))%>% ggplot()+
+    geom_boxplot(aes(x=Infected,y=Chao1,fill=Forest_block)) +
+  scale_fill_brewer(palette="Accent",name = "Forest",labels=c("FF","PF")) + 
+  facet_grid(Species~Parasite,scales = "free_y")
+alpha_ITS
+```
+# Generalized linear model of fungal richness (Chao1)
+```{r}
+library(phyloseq)
+rich = estimate_richness(ps_rare_ITS,measures=c("Shannon","Chao1"))
+sampletable <- sample_data(ps_rare_ITS)
+sampletable.tidy <- as_tibble(sampletable,rownames="Sample")
+rich.tidy = as_tibble(rich,rownames="Sample")%>% mutate(Sample=str_replace_all(Sample,"\\.","-"))
+rich.tidy <- sampletable.tidy %>% right_join(rich.tidy)
+
+rich.tidy <- rich.tidy %>% 
+  pivot_longer(cols = 26:30,names_to = "Parasite",values_to = "P_count") %>%
+  mutate(Infected=ifelse(P_count >0,"Pos","Neg"))
+
+fm <- glm(Chao1 ~  Species + Parasite + Forest_block + Infected %in% (Species + Parasite + Forest_block), rich.tidy,family = "poisson")
+#opar=par(mfrow=c(2,2))
+#plot(fm,main="fm")
+```
+#Group sizes
+```{r}
+rich.tidy %>% count(Species,Forest_block,Parasite,Infected) %>% pivot_wider(names_from = Infected,values_from = n)
+```
+# Post-hoc analysis 
+```{r}
+library("emmeans")
+library("broom")
+fm.emm=emmeans(fm,pairwise ~ Infected | (Species + Parasite + Forest_block),type = "response")
+tidy(fm.emm$contrasts)
+```
+# Generalized linear model of fungal diversity (Shannon)
+```{r}
+library(phyloseq)
+rich = estimate_richness(ps_rare_ITS,measures=c("Shannon","Chao1"))
+sampletable <- sample_data(ps_rare_ITS)
+sampletable.tidy <- as_tibble(sampletable,rownames="Sample")
+rich.tidy = as_tibble(rich,rownames="Sample")%>% mutate(Sample=str_replace_all(Sample,"\\.","-"))
+rich.tidy <- sampletable.tidy %>% right_join(rich.tidy)
+
+rich.tidy <- rich.tidy %>% 
+  pivot_longer(cols = 26:30,names_to = "Parasite",values_to = "P_count") %>%
+  mutate(Infected=ifelse(P_count >0,"Pos","Neg"))
+
+fm_S <- glm(Shannon ~  Species + Parasite + Forest_block + Infected %in% (Species + Parasite + Forest_block), rich.tidy,family = "gaussian")
+#opar=par(mfrow=c(2,2))
+#plot(fm_S,main="fm")
+```
+# Post-hoc analysis 
+```{r}
+library("emmeans")
+library("broom")
+fm_S.emm=emmeans(fm_S,pairwise ~ Infected | (Species + Parasite + Forest_block),type = "response")
+tidy(fm_S.emm$contrasts)
+```
+
+## Beta diversity - Bacteria - Papio cynocephalus
+```{r fig.width=8,fig.height=6}
+ps_rare_16S_Pc <- subset_samples(ps_rare_16S,Species=="Papio cynocephalus")
+bray_diss_Pc = phyloseq::distance(ps_rare_16S_Pc, method="bray")
+```
+
+```{r}
+ordination_Pc = ordinate(ps_rare_16S_Pc, method="PCoA", distance=bray_diss_Pc)
+ordination_data=rownames_to_column(data.frame(ordination_Pc$vectors), var = "ID_16S") %>% left_join(rownames_to_column(data.frame(sample_data(ps_rare_16S_Pc), check.names = F), var = "ID_16S"))%>% 
+  pivot_longer(cols = 93:97,names_to = "Parasite",values_to = "P_count") %>% 
+  mutate(Infected=ifelse(P_count>0,"Positive","Negative"))
+
+ordination_data %>% ggplot(aes(x=Axis.1,y=Axis.2)) + 
+  geom_point(aes(color=Infected,shape=Forest_block)) + 
+  facet_grid(~Parasite)
+#ggsave("Figure_Tables/Beta_16S_Papio.pdf",device="pdf")
+
+beta_pc_16S <- ordination_data %>% 
+  filter(!Parasite %in% c("Spirurid","Dicrocelid")) %>%
+  ggplot(aes(x=Axis.1,y=Axis.2,color=Infected)) + 
+  geom_point(aes(shape=Forest_block),size=3) +
+  stat_ellipse() +
+  scale_color_brewer(palette="Set2") + 
+  facet_grid(~Parasite) + 
+  labs(color = "Helminth Presence")
+beta_pc_16S
+```
+# Homogeneity of group dispersions 
+```{r}
+library(vegan)
+sampletable_Pc <- rownames_to_column(data.frame(sample_data(ps_rare_16S_Pc), check.names = F), var = "ID_16S") %>% 
+  pivot_longer(cols = c("Strongyloides","Trichuris","Strongylid","Spirurid","Dicrocelid"),names_to = "Parasite",values_to = "P_count") %>% mutate(Infected=ifelse(P_count>0,"Pos","Neg"))
+beta <- function(distmat,group){
+  disp <- betadisper(distmat,group,bias.adjust=TRUE)
+  ano <- anova(disp)
+  return(ano)
+}
+
+sampletable_Pc %>% split(.$Parasite) %>%
+  map(~ beta(bray_diss_Pc,.$Infected)) %>% 
+  map(tidy) %>% enframe() %>% unnest()
+```
+# Compositional dissimilarity
+```{r}
+library(vegan)
+sampletable_Pc <- rownames_to_column(data.frame(sample_data(ps_rare_16S_Pc), check.names = F), var = "ID_16S") %>% 
+  pivot_longer(cols = c("Strongyloides","Trichuris","Strongylid","Spirurid","Dicrocelid"),names_to = "Parasite",values_to = "P_count") %>% mutate(Infected=ifelse(P_count>0,"Pos","Neg"))
+ado <- function(distmat,group){
+  disp <-adonis2(distmat~Infected,data=group)
+  return(disp)
+}
+
+beta_ado <- sampletable_Pc %>% split(.$Parasite) %>%
+  map(~ ado(bray_diss_Pc,.)) %>% 
+  map(tidy) %>% enframe() %>% unnest() %>% filter(term=="Infected") %>% mutate(p_adjust=p.adjust(p.value))
+beta_ado
+```
+## Beta diversity - Bacteria - Procolobus gordonorum
+```{r fig.width=8,fig.height=6}
+ps_rare_16S_Pg <- subset_samples(ps_rare_16S,Species=="Procolobus gordonorum")
+bray_diss_Pg = phyloseq::distance(ps_rare_16S_Pg, method="bray")
+```
+
+```{r}
+ordination_Pg = ordinate(ps_rare_16S_Pg, method="PCoA", distance=bray_diss_Pg)
+ordination_data=rownames_to_column(data.frame(ordination_Pg$vectors), var = "ID_16S") %>% left_join(rownames_to_column(data.frame(sample_data(ps_rare_16S_Pg), check.names = F), var = "ID_16S"))%>% 
+  pivot_longer(cols = 114:118,names_to = "Parasite",values_to = "P_count") %>% 
+  mutate(Infected=ifelse(P_count>0,"Positive","Negative"))
+
+ordination_data %>% ggplot(aes(x=Axis.1,y=Axis.2)) + 
+  geom_point(aes(color=Infected,shape=Forest_block)) + 
+  facet_grid(~Parasite)
+#ggsave("Figure_Tables/Beta_16S_Proco.pdf",device="pdf")
+
+beta_pg_16S <- ordination_data %>% 
+  filter(!Parasite %in% c("Spirurid","Dicrocelid")) %>%
+  ggplot(aes(x=Axis.1,y=Axis.2,color=Infected)) + 
+  geom_point(aes(shape=Forest_block),size=3) +
+  stat_ellipse() +
+  scale_color_brewer(palette="Set2") + 
+  facet_grid(~Parasite) + 
+  labs(color = "Helminth Presence")
+beta_pg_16S
+```
+# Homogeneity of group dispersions 
+```{r}
+library(vegan)
+sampletable_Pg <- rownames_to_column(data.frame(sample_data(ps_rare_16S_Pg), check.names = F), var = "ID_16S") %>% 
+  pivot_longer(cols = c("Strongyloides","Trichuris","Strongylid"),names_to = "Parasite",values_to = "P_count") %>% mutate(Infected=ifelse(P_count>0,"Pos","Neg"))
+beta <- function(distmat,group){
+  disp <- betadisper(distmat,group,bias.adjust=TRUE)
+  ano <- anova(disp)
+  return(ano)
+}
+
+sampletable_Pg %>% split(.$Parasite) %>%
+  map(~ beta(bray_diss_Pg,.$Infected)) %>% 
+  map(tidy) %>% enframe() %>% unnest() 
+```
+# Compositional dissimilarity
+```{r}
+library(vegan)
+sampletable_Pg <- rownames_to_column(data.frame(sample_data(ps_rare_16S_Pg), check.names = F), var = "ID_16S") %>% 
+  pivot_longer(cols = c("Strongyloides","Trichuris","Strongylid"),names_to = "Parasite",values_to = "P_count") %>% mutate(Infected=ifelse(P_count>0,"Positive","Negative"))
+ado <- function(distmat,group){
+  disp <-adonis2(distmat~Infected,data=group)
+  return(disp)
+}
+
+beta_ado <- sampletable_Pg %>% split(.$Parasite) %>%
+  map(~ ado(bray_diss_Pg,.)) %>% 
+  map(tidy) %>% enframe() %>% unnest() %>% filter(term=="Infected") %>% mutate(p_adjust=p.adjust(p.value))
+
+beta_ado
+```
+
+#Figure - Bacteria
+```{r,fig.height=10,fig.width=8}
+library(cowplot)
+legend_alpha <- get_legend(
+  # create some space to the left of the legend
+  alpha_16S + theme(legend.box.margin = margin(0, 0, 0, 0)) 
+)
+
+beta_pc_16S <- beta_pc_16S 
+
+legend_beta <- get_legend(
+  # create some space to the left of the legend
+  beta_pc_16S + theme(legend.box.margin = margin(0, 0, 0, 0))+ scale_shape_discrete(name = "Forest",labels=c("FF","PF")) 
+)
+fig_beta_nol <- plot_grid(beta_pc_16S+ theme(legend.position="none"),
+                      beta_pg_16S+ theme(legend.position="none"),
+                      nrow=2,
+                      labels=c("b","c"))
+fig_bact <- plot_grid(alpha_16S+ 
+                        theme(legend.position="none"),
+                      legend_alpha,
+                      fig_beta_nol,
+                      legend_beta,nrow=2,rel_widths=c(2.5,.5),rel_heights=c(0.8,1),
+          labels=c("a",""))
+fig_bact
+```
+
+
+# Beta diversity - Fungi - Papio cynocephalus
+```{r fig.width=8,fig.height=6}
+ps_rare_ITS_Pc <- subset_samples(ps_rare_ITS,Species=="Papio cynocephalus")
+bray_diss_Pc = phyloseq::distance(ps_rare_ITS_Pc, method="bray")
+```
+
+```{r}
+ordination_Pc = ordinate(ps_rare_ITS_Pc, method="PCoA", distance=bray_diss_Pc)
+ordination_data=rownames_to_column(data.frame(ordination_Pc$vectors), var = "ID_ITS") %>% left_join(rownames_to_column(data.frame(sample_data(ps_rare_ITS_Pc), check.names = F), var = "ID_ITS"))%>% 
+  pivot_longer(cols = 81:85,names_to = "Parasite",values_to = "P_count") %>% mutate(Infected=ifelse(P_count>0,"Pos","Neg"))
+
+ordination_data %>% 
+  ggplot(aes(x=Axis.1,y=Axis.2)) + 
+  geom_point(aes(color=Infected,shape=Forest_block)) + 
+  facet_grid(~Parasite)
+#ggsave("Figure_Tables/Beta_ITS_Papio.pdf",device="pdf")
+
+beta_pc_ITS <- ordination_data %>% 
+  filter(!Parasite %in% c("Spirurid","Dicrocelid")) %>%
+  ggplot(aes(x=Axis.1,y=Axis.2,color=Infected)) + 
+  geom_point(aes(shape=Forest_block),size=3) +
+  stat_ellipse() +
+  scale_color_brewer(palette="Set2") + 
+  facet_grid(~Parasite) + 
+  labs(color = "Helminth Presence")
+beta_pc_ITS
+```
+# Homogeneity of group dispersions
+```{r}
+library(vegan)
+sampletable_Pc <- rownames_to_column(data.frame(sample_data(ps_rare_ITS_Pc), check.names = F), var = "ID_ITS") %>% 
+  pivot_longer(cols = c("Strongyloides","Trichuris","Strongylid","Spirurid","Dicrocelid"),names_to = "Parasite",values_to = "P_count") %>% mutate(Infected=ifelse(P_count>0,"Pos","Neg"))
+beta <- function(distmat,group){
+  disp <- betadisper(distmat,group,bias.adjust=TRUE)
+  ano <- anova(disp)
+  return(ano)
+}
+
+sampletable_Pc %>% split(.$Parasite) %>%
+  map(~ beta(bray_diss_Pc,.$Infected)) %>% 
+  map(tidy) %>% enframe() %>% unnest()
+```
+# Compositional dissimilarity
+```{r}
+library(vegan)
+sampletable_Pc <- rownames_to_column(data.frame(sample_data(ps_rare_ITS_Pc), check.names = F), var = "ID_ITS") %>% 
+  pivot_longer(cols = c("Strongyloides","Trichuris","Strongylid","Spirurid","Dicrocelid"),names_to = "Parasite",values_to = "P_count") %>% mutate(Infected=ifelse(P_count>0,"Pos","Neg"))
+ado <- function(distmat,group){
+  disp <-adonis2(distmat~Infected,data=group)
+  return(disp)
+}
+
+beta_ado <- sampletable_Pc %>% split(.$Parasite) %>%
+  map(~ ado(bray_diss_Pc,.)) %>% 
+  map(tidy) %>% enframe() %>% unnest() %>% filter(term=="Infected") %>% mutate(p_adjust=p.adjust(p.value))
+beta_ado 
+```
+## Beta diversity - Fungi - Procolobus gordonorum
+```{r fig.width=8,fig.height=6}
+ps_rare_ITS_Pg <- subset_samples(ps_rare_ITS,Species=="Procolobus gordonorum")
+bray_diss_Pg = phyloseq::distance(ps_rare_ITS_Pg, method="bray")
+```
+
+```{r}
+ordination_Pg = ordinate(ps_rare_ITS_Pg, method="PCoA", distance=bray_diss_Pg)
+ordination_data=rownames_to_column(data.frame(ordination_Pg$vectors), var = "ID_ITS") %>% left_join(rownames_to_column(data.frame(sample_data(ps_rare_ITS_Pg), check.names = F), var = "ID_ITS"))%>% 
+  pivot_longer(cols = 99:103,names_to = "Parasite",values_to = "P_count") %>% 
+  mutate(Infected=ifelse(P_count>0,"Positive","Negative"))
+
+ordination_data %>% ggplot(aes(x=Axis.1,y=Axis.2)) + 
+  geom_point(aes(color=Infected,shape=Forest_block)) + 
+  facet_grid(~Parasite)
+
+beta_pg_ITS <- ordination_data %>% 
+  filter(!Parasite %in% c("Spirurid","Dicrocelid")) %>%
+  ggplot(aes(x=Axis.1,y=Axis.2,color=Infected)) + 
+  geom_point(aes(shape=Forest_block),size=3) +
+  stat_ellipse() +
+  scale_color_brewer(palette="Set2") + 
+  facet_grid(~Parasite) + 
+  labs(color = "Helminth Presence")
+beta_pg_ITS
+```
+# Homogeneity of group dispersions
+```{r}
+library(vegan)
+sampletable_Pg <- rownames_to_column(data.frame(sample_data(ps_rare_ITS_Pg), check.names = F), var = "ID_ITS") %>% 
+  pivot_longer(cols = c("Strongyloides","Trichuris","Strongylid"),names_to = "Parasite",values_to = "P_count") %>% mutate(Infected=ifelse(P_count>0,"Positive","Negative"))
+beta <- function(distmat,group){
+  disp <- betadisper(distmat,group,bias.adjust=TRUE)
+  ano <- anova(disp)
+  return(ano)
+}
+
+sampletable_Pg %>% split(.$Parasite) %>%
+  map(~ beta(bray_diss_Pg,.$Infected)) %>% 
+  map(tidy) %>% enframe() %>% unnest()
+```
+# Compositional dissimilarity
+```{r}
+library(vegan)
+sampletable_Pg <- rownames_to_column(data.frame(sample_data(ps_rare_ITS_Pg), check.names = F), var = "ID_ITS") %>% 
+  pivot_longer(cols = c("Strongyloides","Trichuris","Strongylid"),names_to = "Parasite",values_to = "P_count") %>% mutate(Infected=ifelse(P_count>0,"Positive","Negative"))
+ado <- function(distmat,group){
+  disp <-adonis2(distmat~Infected,data=group)
+  return(disp)
+}
+
+beta_ado <- sampletable_Pg %>% split(.$Parasite) %>%
+  map(~ ado(bray_diss_Pg,.)) %>% 
+  map(tidy) %>% enframe() %>% unnest() %>% filter(term=="Infected") %>% mutate(p_adjust=p.adjust(p.value))
+
+beta_ado
+```
+
+#Figure - Fungi
+```{r,fig.height=10,fig.width=8}
+library(cowplot)
+
+legend_alpha <- get_legend(
+  # create some space to the left of the legend
+  alpha_ITS + theme(legend.box.margin = margin(0, 0, 0, 0)) 
+)
+
+legend_beta <- get_legend(
+  # create some space to the left of the legend
+  beta_pc_ITS + theme(legend.box.margin = margin(0, 0, 0, 0))  + 
+    scale_shape_discrete(name = "Forest",labels=c("FF","PF")) 
+)
+fig_beta_nol <- plot_grid(beta_pc_ITS + theme(legend.position="none"),
+                      beta_pg_ITS+ theme(legend.position="none"),
+                      nrow=2,
+                      labels=c("b","c"))
+fig_funghi <- plot_grid(alpha_ITS + theme(legend.position="none"),legend_alpha,
+          fig_beta_nol,legend_beta,nrow=2,rel_widths=c(2.5,.5),rel_heights=c(0.8,1),
+          labels=c("a",""))
+
+fig_funghi
+```
+
+### Deseq - 16S - - Procolobus gordonorum
+
+```{r}
+library("DESeq2")
+sampletable_Pg <- data.frame(sample_data(ps_rare_16S_Pg), check.names = F) %>% 
+  mutate(Infected=ifelse(Strongyloides>0,"Pos","Neg"))
+sample_data(ps_rare_16S_Pg) <- sampletable_Pg
+ps_rare_16S_Pg.Deseq <- phyloseq_to_deseq2(ps_rare_16S_Pg, ~ Infected)
+ps_rare_16S_Pg.Deseq = DESeq(ps_rare_16S_Pg.Deseq, test="Wald", fitType="parametric")
+
+
+res = results(ps_rare_16S_Pg.Deseq, cooksCutoff = FALSE)
+alpha = 0.05
+sigtab = res[which(res$padj < alpha), ]
+sigtab = cbind(as(sigtab, "data.frame"), as(tax_table(ps_rare_16S_Pg)[rownames(sigtab), ], "matrix"))
+sigtab
+```
+
+### Deseq - ITS - Procolobus gordonorum
+
+```{r}
+library("DESeq2")
+sampletable_Pg <- data.frame(sample_data(ps_rare_ITS_Pg), check.names = F) %>% 
+  mutate(Infected=ifelse(Trichuris>0,"Pos","Neg"))
+sample_data(ps_rare_ITS_Pg) <- sampletable_Pg
+ps_rare_ITS_Pg.Deseq <- phyloseq_to_deseq2(ps_rare_ITS_Pg, ~ Infected)
+
+gm_mean = function(x, na.rm=TRUE){
+  exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))
+}
+
+##sizefactor correction (no OTU is present in all samples)
+geoMeans = apply(counts(ps_rare_ITS_Pg.Deseq), 1, gm_mean)
+ps_rare_ITS_Pg.Deseq = estimateSizeFactors(ps_rare_ITS_Pg.Deseq, geoMeans = geoMeans)
+ps_rare_ITS_Pg.Deseq = DESeq(ps_rare_ITS_Pg.Deseq, fitType="local")
+  
+ps_rare_ITS_Pg.Deseq = DESeq(ps_rare_ITS_Pg.Deseq, test="Wald", fitType="parametric")
+
+
+res = results(ps_rare_ITS_Pg.Deseq, cooksCutoff = FALSE)
+alpha = 0.05
+sigtab = res[which(res$padj < alpha), ]
+sigtab = cbind(as(sigtab, "data.frame"), as(tax_table(ps_rare_ITS_Pg)[rownames(sigtab), ], "matrix"))
+sigtab
+```
